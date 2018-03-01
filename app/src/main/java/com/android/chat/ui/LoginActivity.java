@@ -1,23 +1,35 @@
 package com.android.chat.ui;
 
+import android.annotation.SuppressLint;
 import android.app.ActivityOptions;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.design.widget.FloatingActionButton;
+import android.support.design.widget.Snackbar;
 import android.support.v7.app.AppCompatActivity;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.auth.GoogleAuthUtil;
 import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.Task;
+import com.google.firebase.FirebaseException;
+import com.google.firebase.FirebaseTooManyRequestsException;
 import com.google.firebase.auth.AuthResult;
 import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.auth.PhoneAuthCredential;
+import com.google.firebase.auth.PhoneAuthProvider;
 import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.FirebaseDatabase;
@@ -31,338 +43,426 @@ import com.yarolegovich.lovelydialog.LovelyInfoDialog;
 import com.yarolegovich.lovelydialog.LovelyProgressDialog;
 
 import java.util.HashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 
+public class LoginActivity extends AppCompatActivity implements
+        View.OnClickListener {
 
-public class LoginActivity extends AppCompatActivity {
-    private static String TAG = "LoginActivity";
-    FloatingActionButton fab;
-    private final Pattern VALID_EMAIL_ADDRESS_REGEX =
-            Pattern.compile("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,6}$", Pattern.CASE_INSENSITIVE);
-    private EditText editTextUsername, editTextPassword;
-    private LovelyProgressDialog waitingDialog;
+    private static final String TAG = "PhoneAuthActivity";
 
-    private AuthUtils authUtils;
+    private static final String KEY_VERIFY_IN_PROGRESS = "key_verify_in_progress";
+
+    private static final int STATE_INITIALIZED = 1;
+    private static final int STATE_CODE_SENT = 2;
+    private static final int STATE_VERIFY_FAILED = 3;
+    private static final int STATE_VERIFY_SUCCESS = 4;
+    private static final int STATE_SIGNIN_FAILED = 5;
+    private static final int STATE_SIGNIN_SUCCESS = 6;
+
+    // [START declare_auth]
     private FirebaseAuth mAuth;
-    private FirebaseAuth.AuthStateListener mAuthListener;
-    private FirebaseUser user;
-    private boolean firstTimeAccess;
+    // [END declare_auth]
 
-    @Override
-    protected void onStart() {
-        super.onStart();
-        mAuth.addAuthStateListener(mAuthListener);
-    }
+    private boolean mVerificationInProgress = false;
+    private String mVerificationId;
+    private PhoneAuthProvider.ForceResendingToken mResendToken;
+    private PhoneAuthProvider.OnVerificationStateChangedCallbacks mCallbacks;
+
+    private ViewGroup mPhoneNumberViews;
+    private ViewGroup mSignedInViews;
+
+    private TextView mStatusText;
+    private TextView mDetailText;
+
+    private EditText mPhoneNumberField;
+    private EditText mVerificationField;
+
+    private Button mStartButton;
+    private Button mVerifyButton;
+    private Button mResendButton;
+    private Button mSignOutButton;
+    private  FirebaseUser user;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_login);
-        fab = (FloatingActionButton) findViewById(R.id.fab);
-        editTextUsername = (EditText) findViewById(R.id.et_username);
-        editTextPassword = (EditText) findViewById(R.id.et_password);
-        firstTimeAccess = true;
-        initFirebase();
-    }
 
+        // Restore instance state
+        if (savedInstanceState != null) {
+            onRestoreInstanceState(savedInstanceState);
+        }
 
-    /**
-     * Khởi tạo các thành phần cần thiết cho việc quản lý đăng nhập
-     */
-    private void initFirebase() {
-        //Khoi tao thanh phan de dang nhap, dang ky
+        // Assign views
+        mPhoneNumberViews = findViewById(R.id.phone_auth_fields);
+        mSignedInViews = findViewById(R.id.signed_in_buttons);
+
+        mStatusText = findViewById(R.id.status);
+        mDetailText = findViewById(R.id.detail);
+
+        mPhoneNumberField = findViewById(R.id.field_phone_number);
+        mVerificationField = findViewById(R.id.field_verification_code);
+
+        mStartButton = findViewById(R.id.button_start_verification);
+        mVerifyButton = findViewById(R.id.button_verify_phone);
+        mResendButton = findViewById(R.id.button_resend);
+        mSignOutButton = findViewById(R.id.sign_out_button);
+
+        // Assign click listeners
+        mStartButton.setOnClickListener(this);
+        mVerifyButton.setOnClickListener(this);
+        mResendButton.setOnClickListener(this);
+        mSignOutButton.setOnClickListener(this);
+
+        // [START initialize_auth]
         mAuth = FirebaseAuth.getInstance();
-        authUtils = new AuthUtils();
-        mAuthListener = new FirebaseAuth.AuthStateListener() {
+        // [END initialize_auth]
+
+        // Initialize phone auth callbacks
+        // [START phone_auth_callbacks]
+        mCallbacks = new PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+
             @Override
-            public void onAuthStateChanged(@NonNull FirebaseAuth firebaseAuth) {
-                user = firebaseAuth.getCurrentUser();
-                if (user != null) {
-                    // User is signed in
-                    StaticConfig.UID = user.getUid();
-                    Log.d(TAG, "onAuthStateChanged:signed_in:" + user.getUid());
-                    if (firstTimeAccess) {
-                        startActivity(new Intent(LoginActivity.this, MainActivity.class));
-                        LoginActivity.this.finish();
-                    }
-                } else {
-                    Log.d(TAG, "onAuthStateChanged:signed_out");
+            public void onVerificationCompleted(PhoneAuthCredential credential) {
+                // This callback will be invoked in two situations:
+                // 1 - Instant verification. In some cases the phone number can be instantly
+                //     verified without needing to send or enter a verification code.
+                // 2 - Auto-retrieval. On some devices Google Play services can automatically
+                //     detect the incoming verification SMS and perform verification without
+                //     user action.
+                Log.d(TAG, "onVerificationCompleted:" + credential);
+                // [START_EXCLUDE silent]
+                mVerificationInProgress = false;
+                // [END_EXCLUDE]
+
+                // [START_EXCLUDE silent]
+                // Update the UI and attempt sign in with the phone credential
+                updateUI(STATE_VERIFY_SUCCESS, credential);
+                // [END_EXCLUDE]
+                signInWithPhoneAuthCredential(credential);
+            }
+
+            @Override
+            public void onVerificationFailed(FirebaseException e) {
+                // This callback is invoked in an invalid request for verification is made,
+                // for instance if the the phone number format is not valid.
+                Log.w(TAG, "onVerificationFailed", e);
+                // [START_EXCLUDE silent]
+                mVerificationInProgress = false;
+                // [END_EXCLUDE]
+
+                if (e instanceof FirebaseAuthInvalidCredentialsException) {
+                    // Invalid request
+                    // [START_EXCLUDE]
+                    mPhoneNumberField.setError("Invalid phone number.");
+                    // [END_EXCLUDE]
+                } else if (e instanceof FirebaseTooManyRequestsException) {
+                    // The SMS quota for the project has been exceeded
+                    // [START_EXCLUDE]
+                    Snackbar.make(findViewById(android.R.id.content), "Quota exceeded.",
+                            Snackbar.LENGTH_SHORT).show();
+                    // [END_EXCLUDE]
                 }
-                firstTimeAccess = false;
+
+                // Show a message and update the UI
+                // [START_EXCLUDE]
+                updateUI(STATE_VERIFY_FAILED);
+                // [END_EXCLUDE]
+            }
+
+            @Override
+            public void onCodeSent(String verificationId,
+                                   PhoneAuthProvider.ForceResendingToken token) {
+                // The SMS verification code has been sent to the provided phone number, we
+                // now need to ask the user to enter the code and then construct a credential
+                // by combining the code with a verification ID.
+                Log.d(TAG, "onCodeSent:" + verificationId);
+
+                // Save verification ID and resending token so we can use them later
+                mVerificationId = verificationId;
+                mResendToken = token;
+
+                // [START_EXCLUDE]
+                // Update UI
+                updateUI(STATE_CODE_SENT);
+                // [END_EXCLUDE]
             }
         };
+        // [END phone_auth_callbacks]
+    }
 
-        //Khoi tao dialog waiting khi dang nhap
-        waitingDialog = new LovelyProgressDialog(this).setCancelable(false);
+    // [START on_start_check_user]
+    @Override
+    public void onStart() {
+        super.onStart();
+        // Check if user is signed in (non-null) and update UI accordingly.
+        user = mAuth.getCurrentUser();
+        updateUI(user);
+
+        // [START_EXCLUDE]
+        if (mVerificationInProgress && validatePhoneNumber()) {
+            startPhoneNumberVerification(mPhoneNumberField.getText().toString());
+        }
+        // [END_EXCLUDE]
+    }
+    // [END on_start_check_user]
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean(KEY_VERIFY_IN_PROGRESS, mVerificationInProgress);
     }
 
     @Override
-    protected void onStop() {
-        super.onStop();
-        if (mAuthListener != null) {
-            mAuth.removeAuthStateListener(mAuthListener);
+    protected void onRestoreInstanceState(Bundle savedInstanceState) {
+        super.onRestoreInstanceState(savedInstanceState);
+        mVerificationInProgress = savedInstanceState.getBoolean(KEY_VERIFY_IN_PROGRESS);
+    }
+
+
+    private void startPhoneNumberVerification(String phoneNumber) {
+        // [START start_phone_auth]
+        PhoneAuthProvider.getInstance().verifyPhoneNumber(
+                phoneNumber,        // Phone number to verify
+                60,                 // Timeout duration
+                TimeUnit.SECONDS,   // Unit of timeout
+                this,               // Activity (for callback binding)
+                mCallbacks);        // OnVerificationStateChangedCallbacks
+        // [END start_phone_auth]
+
+        mVerificationInProgress = true;
+    }
+
+    private void verifyPhoneNumberWithCode(String verificationId, String code) {
+        // [START verify_with_code]
+        PhoneAuthCredential credential = PhoneAuthProvider.getCredential(verificationId, code);
+        // [END verify_with_code]
+        signInWithPhoneAuthCredential(credential);
+    }
+
+    // [START resend_verification]
+    private void resendVerificationCode(String phoneNumber,
+                                        PhoneAuthProvider.ForceResendingToken token) {
+        PhoneAuthProvider.getInstance().verifyPhoneNumber(
+                phoneNumber,        // Phone number to verify
+                60,                 // Timeout duration
+                TimeUnit.SECONDS,   // Unit of timeout
+                this,               // Activity (for callback binding)
+                mCallbacks,         // OnVerificationStateChangedCallbacks
+                token);             // ForceResendingToken from callbacks
+    }
+    // [END resend_verification]
+
+    // [START sign_in_with_phone]
+    private void signInWithPhoneAuthCredential(final PhoneAuthCredential credential) {
+        mAuth.signInWithCredential(credential)
+                .addOnCompleteListener(this, new OnCompleteListener<AuthResult>() {
+                    @Override
+                    public void onComplete(@NonNull Task<AuthResult> task) {
+                        if (task.isSuccessful()) {
+                            // Sign in success, update UI with the signed-in user's information
+                            Log.d(TAG, "signInWithCredential:success");
+                             user = task.getResult().getUser();
+                            // [START_EXCLUDE]
+                            updateUI(STATE_SIGNIN_SUCCESS, user);
+                            initNewUserInfo(user.getPhoneNumber());
+                            // [END_EXCLUDE]
+                        } else {
+                            // Sign in failed, display a message and update the UI
+                            Log.w(TAG, "signInWithCredential:failure", task.getException());
+                            if (task.getException() instanceof FirebaseAuthInvalidCredentialsException) {
+                                // The verification code entered was invalid
+                                // [START_EXCLUDE silent]
+                                mVerificationField.setError("Invalid code.");
+                                // [END_EXCLUDE]
+                            }
+                            // [START_EXCLUDE silent]
+                            // Update UI
+                            updateUI(STATE_SIGNIN_FAILED);
+                            // [END_EXCLUDE]
+                        }
+                    }
+                });
+    }
+    // [END sign_in_with_phone]
+
+    private void signOut() {
+        mAuth.signOut();
+        updateUI(STATE_INITIALIZED);
+    }
+
+    private void updateUI(int uiState) {
+        updateUI(uiState, mAuth.getCurrentUser(), null);
+    }
+
+    private void updateUI(FirebaseUser user) {
+        if (user != null) {
+            updateUI(STATE_SIGNIN_SUCCESS, user);
+        } else {
+            updateUI(STATE_INITIALIZED);
         }
     }
 
-    public void clickRegisterLayout(View view) {
-        getWindow().setExitTransition(null);
-        getWindow().setEnterTransition(null);
+    private void updateUI(int uiState, FirebaseUser user) {
+        updateUI(uiState, user, null);
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            ActivityOptions options =
-                    ActivityOptions.makeSceneTransitionAnimation(this, fab, fab.getTransitionName());
-            startActivityForResult(new Intent(this, RegisterActivity.class), StaticConfig.REQUEST_CODE_REGISTER, options.toBundle());
+    private void updateUI(int uiState, PhoneAuthCredential cred) {
+        updateUI(uiState, null, cred);
+    }
+
+    @SuppressLint("StringFormatInvalid")
+    private void updateUI(int uiState, FirebaseUser user, PhoneAuthCredential cred) {
+        switch (uiState) {
+            case STATE_INITIALIZED:
+                // Initialized state, show only the phone number field and start button
+                enableViews(mStartButton, mPhoneNumberField);
+                disableViews(mVerifyButton, mResendButton, mVerificationField);
+                mDetailText.setText(null);
+                break;
+            case STATE_CODE_SENT:
+                // Code sent state, show the verification field, the
+                enableViews(mVerifyButton, mResendButton, mPhoneNumberField, mVerificationField);
+                disableViews(mStartButton);
+                mDetailText.setText(R.string.status_code_sent);
+                break;
+            case STATE_VERIFY_FAILED:
+                // Verification has failed, show all options
+                enableViews(mStartButton, mVerifyButton, mResendButton, mPhoneNumberField,
+                        mVerificationField);
+                mDetailText.setText(R.string.status_verification_failed);
+                break;
+            case STATE_VERIFY_SUCCESS:
+                // Verification has succeeded, proceed to firebase sign in
+                disableViews(mStartButton, mVerifyButton, mResendButton, mPhoneNumberField,
+                        mVerificationField);
+                mDetailText.setText(R.string.status_verification_succeeded);
+
+                // Set the verification text based on the credential
+                if (cred != null) {
+                    if (cred.getSmsCode() != null) {
+                        mVerificationField.setText(cred.getSmsCode());
+                    } else {
+                        mVerificationField.setText(R.string.instant_validation);
+                    }
+                }
+
+                break;
+            case STATE_SIGNIN_FAILED:
+                // No-op, handled by sign-in check
+                mDetailText.setText(R.string.status_sign_in_failed);
+                break;
+            case STATE_SIGNIN_SUCCESS:
+                // Np-op, handled by sign-in check
+                break;
+        }
+
+        if (user == null) {
+            // Signed out
+            mPhoneNumberViews.setVisibility(View.VISIBLE);
+            mSignedInViews.setVisibility(View.GONE);
+
+            mStatusText.setText(R.string.signed_out);
         } else {
-            startActivityForResult(new Intent(this, RegisterActivity.class), StaticConfig.REQUEST_CODE_REGISTER);
+            saveUserInfo();
+            startActivity(new Intent(LoginActivity.this, MainActivity.class));
+            LoginActivity.this.finish();
+
+            // Signed in
+            mPhoneNumberViews.setVisibility(View.GONE);
+            mSignedInViews.setVisibility(View.VISIBLE);
+
+            enableViews(mPhoneNumberField, mVerificationField);
+            mPhoneNumberField.setText(null);
+            mVerificationField.setText(null);
+
+            mStatusText.setText(R.string.signed_in);
+            mDetailText.setText(getString(R.string.firebase_status_fmt, user.getUid()));
+        }
+    }
+
+    private boolean validatePhoneNumber() {
+        String phoneNumber = mPhoneNumberField.getText().toString();
+        if (TextUtils.isEmpty(phoneNumber)) {
+            mPhoneNumberField.setError("Invalid phone number.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private void enableViews(View... views) {
+        for (View v : views) {
+            v.setEnabled(true);
+        }
+    }
+
+    private void disableViews(View... views) {
+        for (View v : views) {
+            v.setEnabled(false);
         }
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == StaticConfig.REQUEST_CODE_REGISTER && resultCode == RESULT_OK) {
-            authUtils.createUser(data.getStringExtra(StaticConfig.STR_EXTRA_USERNAME), data.getStringExtra(StaticConfig.STR_EXTRA_PASSWORD));
+    public void onClick(View view) {
+        switch (view.getId()) {
+            case R.id.button_start_verification:
+                if (!validatePhoneNumber()) {
+                    return;
+                }
+
+                startPhoneNumberVerification(mPhoneNumberField.getText().toString());
+                break;
+            case R.id.button_verify_phone:
+                String code = mVerificationField.getText().toString();
+                if (TextUtils.isEmpty(code)) {
+                    mVerificationField.setError("Cannot be empty.");
+                    return;
+                }
+
+                verifyPhoneNumberWithCode(mVerificationId, code);
+                break;
+            case R.id.button_resend:
+                resendVerificationCode(mPhoneNumberField.getText().toString(), mResendToken);
+                break;
+            case R.id.sign_out_button:
+                signOut();
+                break;
         }
     }
 
-    public void clickLogin(View view) {
-        String username = editTextUsername.getText().toString();
-        String password = editTextPassword.getText().toString();
-        if (validate(username, password)) {
-            authUtils.signIn(username, password);
-        } else {
-            Toast.makeText(this, "Invalid email or empty password", Toast.LENGTH_SHORT).show();
-        }
-    }
 
-    @Override
-    public void onBackPressed() {
-        super.onBackPressed();
-        setResult(RESULT_CANCELED, null);
-        finish();
-    }
+    void saveUserInfo() {
+        FirebaseDatabase.getInstance().getReference().child("user/" + StaticConfig.UID).addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot dataSnapshot) {
+                //waitingDialog.dismiss();
+                HashMap hashUser = (HashMap) dataSnapshot.getValue();
+                User userInfo = new User();
+                userInfo.name = (String) hashUser.get("phone");
+                userInfo.email = (String) hashUser.get("email");
+                userInfo.avata = (String) hashUser.get("avata");
+                userInfo.phone = (String) hashUser.get("phone");
+                SharedPreferenceHelper.getInstance(LoginActivity.this).saveUserInfo(userInfo);
+            }
 
-    private boolean validate(String emailStr, String password) {
-        Matcher matcher = VALID_EMAIL_ADDRESS_REGEX.matcher(emailStr);
-        return (password.length() > 0 || password.equals(";")) && matcher.find();
-    }
+            @Override
+            public void onCancelled(DatabaseError databaseError) {
 
-    public void clickResetPassword(View view) {
-        String username = editTextUsername.getText().toString();
-        if (validate(username, ";")) {
-            authUtils.resetPassword(username);
-        } else {
-            Toast.makeText(this, "Invalid email", Toast.LENGTH_SHORT).show();
-        }
+            }
+        });
     }
 
     /**
-     * Dinh nghia cac ham tien ich cho quas trinhf dang nhap, dang ky,...
+     * Khoi tao thong tin mac dinh cho tai khoan moi
      */
-    class AuthUtils {
-        /**
-         * Action register
-         *
-         * @param email
-         * @param password
-         */
-        void createUser(String email, String password) {
-            waitingDialog.setIcon(R.drawable.ic_add_friend)
-                    .setTitle("Registering....")
-                    .setTopColorRes(R.color.colorPrimary)
-                    .show();
-            mAuth.createUserWithEmailAndPassword(email, password)
-                    .addOnCompleteListener(LoginActivity.this, new OnCompleteListener<AuthResult>() {
-                        @Override
-                        public void onComplete(@NonNull Task<AuthResult> task) {
-                            Log.d(TAG, "createUserWithEmail:onComplete:" + task.isSuccessful());
-                            waitingDialog.dismiss();
-                            // If sign in fails, display a message to the user. If sign in succeeds
-                            // the auth state listener will be notified and logic to handle the
-                            // signed in user can be handled in the listener.
-                            if (!task.isSuccessful()) {
-                                new LovelyInfoDialog(LoginActivity.this) {
-                                    @Override
-                                    public LovelyInfoDialog setConfirmButtonText(String text) {
-                                        findView(com.yarolegovich.lovelydialog.R.id.ld_btn_confirm).setOnClickListener(new View.OnClickListener() {
-                                            @Override
-                                            public void onClick(View view) {
-                                                dismiss();
-                                            }
-                                        });
-                                        return super.setConfirmButtonText(text);
-                                    }
-                                }
-                                        .setTopColorRes(R.color.colorAccent)
-                                        .setIcon(R.drawable.ic_add_friend)
-                                        .setTitle("Register false")
-                                        .setMessage("Email exist or weak password!")
-                                        .setConfirmButtonText("ok")
-                                        .setCancelable(false)
-                                        .show();
-                            } else {
-                                initNewUserInfo();
-                                Toast.makeText(LoginActivity.this, "Register and Login success", Toast.LENGTH_SHORT).show();
-                                startActivity(new Intent(LoginActivity.this, MainActivity.class));
-                                LoginActivity.this.finish();
-                            }
-                        }
-                    })
-                    .addOnFailureListener(new OnFailureListener() {
-                        @Override
-                        public void onFailure(@NonNull Exception e) {
-                            waitingDialog.dismiss();
-                        }
-                    })
-            ;
-        }
-
-
-        /**
-         * Action Login
-         *
-         * @param email
-         * @param password
-         */
-        void signIn(String email, String password) {
-            waitingDialog.setIcon(R.drawable.ic_person_low)
-                    .setTitle("Login....")
-                    .setTopColorRes(R.color.colorPrimary)
-                    .show();
-            mAuth.signInWithEmailAndPassword(email, password)
-                    .addOnCompleteListener(LoginActivity.this, new OnCompleteListener<AuthResult>() {
-                        @Override
-                        public void onComplete(@NonNull Task<AuthResult> task) {
-                            Log.d(TAG, "signInWithEmail:onComplete:" + task.isSuccessful());
-                            // If sign in fails, display a message to the user. If sign in succeeds
-                            // the auth state listener will be notified and logic to handle the
-                            // signed in user can be handled in the listener.
-                            waitingDialog.dismiss();
-                            if (!task.isSuccessful()) {
-                                Log.w(TAG, "signInWithEmail:failed", task.getException());
-                                new LovelyInfoDialog(LoginActivity.this) {
-                                    @Override
-                                    public LovelyInfoDialog setConfirmButtonText(String text) {
-                                        findView(com.yarolegovich.lovelydialog.R.id.ld_btn_confirm).setOnClickListener(new View.OnClickListener() {
-                                            @Override
-                                            public void onClick(View view) {
-                                                dismiss();
-                                            }
-                                        });
-                                        return super.setConfirmButtonText(text);
-                                    }
-                                }
-                                        .setTopColorRes(R.color.colorAccent)
-                                        .setIcon(R.drawable.ic_person_low)
-                                        .setTitle("Login false")
-                                        .setMessage("Email not exist or wrong password!")
-                                        .setCancelable(false)
-                                        .setConfirmButtonText("Ok")
-                                        .show();
-                            } else {
-                                saveUserInfo();
-                                startActivity(new Intent(LoginActivity.this, MainActivity.class));
-                                LoginActivity.this.finish();
-                            }
-                        }
-                    })
-                    .addOnFailureListener(new OnFailureListener() {
-                        @Override
-                        public void onFailure(@NonNull Exception e) {
-                            waitingDialog.dismiss();
-                        }
-                    });
-        }
-
-        /**
-         * Action reset password
-         *
-         * @param email
-         */
-        void resetPassword(final String email) {
-            mAuth.sendPasswordResetEmail(email)
-                    .addOnCompleteListener(new OnCompleteListener<Void>() {
-                        @Override
-                        public void onComplete(@NonNull Task<Void> task) {
-                            new LovelyInfoDialog(LoginActivity.this) {
-                                @Override
-                                public LovelyInfoDialog setConfirmButtonText(String text) {
-                                    findView(com.yarolegovich.lovelydialog.R.id.ld_btn_confirm).setOnClickListener(new View.OnClickListener() {
-                                        @Override
-                                        public void onClick(View view) {
-                                            dismiss();
-                                        }
-                                    });
-                                    return super.setConfirmButtonText(text);
-                                }
-                            }
-                                    .setTopColorRes(R.color.colorPrimary)
-                                    .setIcon(R.drawable.ic_pass_reset)
-                                    .setTitle("Password Recovery")
-                                    .setMessage("Sent email to " + email)
-                                    .setConfirmButtonText("Ok")
-                                    .show();
-                        }
-                    })
-            .addOnFailureListener(new OnFailureListener() {
-                @Override
-                public void onFailure(@NonNull Exception e) {
-                    new LovelyInfoDialog(LoginActivity.this) {
-                        @Override
-                        public LovelyInfoDialog setConfirmButtonText(String text) {
-                            findView(com.yarolegovich.lovelydialog.R.id.ld_btn_confirm).setOnClickListener(new View.OnClickListener() {
-                                @Override
-                                public void onClick(View view) {
-                                    dismiss();
-                                }
-                            });
-                            return super.setConfirmButtonText(text);
-                        }
-                    }
-                            .setTopColorRes(R.color.colorAccent)
-                            .setIcon(R.drawable.ic_pass_reset)
-                            .setTitle("False")
-                            .setMessage("False to sent email to " + email)
-                            .setConfirmButtonText("Ok")
-                            .show();
-                }
-            });
-        }
-
-        /**
-         * Luu thong tin user info cho nguoi dung dang nhap
-         */
-        void saveUserInfo() {
-            FirebaseDatabase.getInstance().getReference().child("user/" + StaticConfig.UID).addListenerForSingleValueEvent(new ValueEventListener() {
-                @Override
-                public void onDataChange(DataSnapshot dataSnapshot) {
-                    waitingDialog.dismiss();
-                    HashMap hashUser = (HashMap) dataSnapshot.getValue();
-                    User userInfo = new User();
-                    userInfo.name = (String) hashUser.get("name");
-                    userInfo.email = (String) hashUser.get("email");
-                    userInfo.avata = (String) hashUser.get("avata");
-                    SharedPreferenceHelper.getInstance(LoginActivity.this).saveUserInfo(userInfo);
-                }
-
-                @Override
-                public void onCancelled(DatabaseError databaseError) {
-
-                }
-            });
-        }
-
-        /**
-         * Khoi tao thong tin mac dinh cho tai khoan moi
-         */
-        void initNewUserInfo() {
-            User newUser = new User();
-            newUser.email = user.getEmail();
-            newUser.name = user.getEmail().substring(0, user.getEmail().indexOf("@"));
-            newUser.avata = StaticConfig.STR_DEFAULT_BASE64;
-            FirebaseDatabase.getInstance().getReference().child("user/" + user.getUid()).setValue(newUser);
-        }
+    void initNewUserInfo(String phone) {
+        User newUser = new User();
+        newUser.avata = StaticConfig.STR_DEFAULT_BASE64;
+        newUser.phone = phone;
+        FirebaseDatabase.getInstance().getReference().child("user/" + user.getUid()).setValue(newUser);
     }
 }

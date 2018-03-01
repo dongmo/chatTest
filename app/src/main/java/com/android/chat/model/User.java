@@ -6,6 +6,7 @@ public class User {
     public String name;
     public String email;
     public String avata;
+    public String phone;
     public Status status;
     public Message message;
 

@@ -103,6 +103,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "703923233229-m8omk3pktrlgmjdfri52u97oo8nsj9ln.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.digitally.chat",
+            "certificate_hash": "68457ba3214eebb103f2bd35ecd6e5172eb173c0"
+          }
+        },
+        {
           "client_id": "703923233229-q140eqtvlqa64oi36qd2ib4j2n3ni6c8.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {

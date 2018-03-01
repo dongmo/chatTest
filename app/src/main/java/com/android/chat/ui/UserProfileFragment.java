@@ -49,6 +49,7 @@ import com.yarolegovich.lovelydialog.LovelyProgressDialog;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 
@@ -62,6 +63,7 @@ public class UserProfileFragment extends Fragment {
 
     private static final String USERNAME_LABEL = "Username";
     private static final String EMAIL_LABEL = "Email";
+    private static final String PHONE_LABEL = "Phone";
     private static final String SIGNOUT_LABEL = "Sign out";
     private static final String RESETPASS_LABEL = "Change Password";
 
@@ -242,11 +244,11 @@ public class UserProfileFragment extends Fragment {
         Configuration userNameConfig = new Configuration(USERNAME_LABEL, myAccount.name, R.mipmap.ic_account_box);
         listConfig.add(userNameConfig);
 
-        Configuration emailConfig = new Configuration(EMAIL_LABEL, myAccount.email, R.mipmap.ic_email);
-        listConfig.add(emailConfig);
+        Configuration phoneConfig = new Configuration(PHONE_LABEL, myAccount.phone, R.mipmap.ic_email);
+        listConfig.add(phoneConfig);
 
-        Configuration resetPass = new Configuration(RESETPASS_LABEL, "", R.mipmap.ic_restore);
-        listConfig.add(resetPass);
+       /* Configuration resetPass = new Configuration(RESETPASS_LABEL, "", R.mipmap.ic_restore);
+        listConfig.add(resetPass);*/
 
         Configuration signout = new Configuration(SIGNOUT_LABEL, "", R.mipmap.ic_power_settings);
         listConfig.add(signout);
@@ -323,7 +325,10 @@ public class UserProfileFragment extends Fragment {
                                     @Override
                                     public void onClick(DialogInterface dialogInterface, int i) {
                                         String newName = input.getText().toString();
-                                        if(!myAccount.name.equals(newName)){
+
+                                        if(myAccount.name == null){
+                                            changeUserName(newName);
+                                        }else if(!myAccount.name.equals(newName)){
                                             changeUserName(newName);
                                         }
                                         dialogInterface.dismiss();

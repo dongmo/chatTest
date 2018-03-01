@@ -15,4 +15,21 @@
     <string name="hint_username">Enter a new username</string>
     <string name="hint_email_reset">Enter your email</string>
     <string name="enter_group_name">Enter group name</string>
+    <string name="phone">Phone</string>
+    <string name="hint_phone_number">Phone Number</string>
+    <string name="hint_verification_code">Verifie Code</string>
+    <string name="start_phone_auth">Enter Phone </string>
+    <string name="verify_phone_auth">Verifie Code Auth</string>
+    <string name="resend_phone_auth">Resend Phone Auth</string>
+    <string name="sign_out">Logout</string>
+    <string name="desc_firebase_lockup">Lockup</string>
+    <string name="phone_title_text">Phone Number Text</string>
+    <string name="signed_out">signed out</string>
+    <string name="status_code_sent">Status Code Sent</string>
+    <string name="status_verification_failed">Verification Failed</string>
+    <string name="status_verification_succeeded">Verification Success</string>
+    <string name="instant_validation">Instant Validation</string>
+    <string name="status_sign_in_failed">Sign Failed</string>
+    <string name="signed_in">Signed In</string>
+    <string name="firebase_status_fmt">Firebase Status</string>
 </resources>
